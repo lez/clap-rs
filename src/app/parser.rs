@@ -1,11 +1,11 @@
 // Std
 use std::ffi::{OsStr, OsString};
 use std::io::{self, BufWriter, Write};
+use std::iter::Peekable;
+use std::mem;
 #[cfg(feature = "debug")]
 use std::os::unix::ffi::OsStrExt;
 use std::slice::Iter;
-use std::iter::Peekable;
-use std::mem;
 
 // Third party
 use vec_map::VecMap;
@@ -15,18 +15,18 @@ use INTERNAL_ERROR_MSG;
 use INVALID_UTF8;
 use SubCommand;
 use app::App;
+use app::Propagation;
 use app::help::Help;
+use app::settings::AppSettings as AS;
+use app::usage::Usage;
+use app::validator::Validator;
 use args::{Arg, ArgMatcher};
 use args::settings::ArgSettings;
-use errors::ErrorKind;
 use errors::Error as ClapError;
+use errors::ErrorKind;
 use errors::Result as ClapResult;
 use osstringext::OsStrExt2;
 use suggestions;
-use app::settings::AppSettings as AS;
-use app::validator::Validator;
-use app::usage::Usage;
-use app::Propagation;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 #[doc(hidden)]
@@ -275,9 +275,10 @@ where
 
     // Does all the initializing and prepares the parser
     fn _build(&mut self) {
-        debugln!("Parser::_build;");
+        debugln!("Parser::_build:{};", self.app.name);
 
         for a in &mut self.app.args {
+            debugln!("Parser::_build:{}:iter_arg:{};", self.app.name, a.name);
             // Add conditional requirements
             if let Some(ref r_ifs) = a.r_ifs {
                 for &(arg, val) in r_ifs {
@@ -286,19 +287,19 @@ where
             }
 
             // Add args with default requirements
-            if a.is_set(ArgSettings::Required) {
-                // If the arg is required, add all it's requirements to master required list
-                if let Some(ref areqs) = a.requires {
-                    for name in areqs
-                        .iter()
-                        .filter(|&&(val, _)| val.is_none())
-                        .map(|&(_, name)| name)
-                    {
-                        self.required.push(name);
-                    }
-                }
-                self.required.push(a.name);
-            }
+            // if a.is_set(ArgSettings::Required) {
+            // If the arg is required, add all it's requirements to master required list
+            // if let Some(ref areqs) = a.requires {
+            //     for name in areqs
+            //         .iter()
+            //         .filter(|&&(val, _)| val.is_none())
+            //         .map(|&(_, name)| name)
+            //     {
+            //         self.required.push(name);
+            //     }
+            // }
+            //     self.required.push(a.name);
+            // }
 
             count_arg(
                 a,
@@ -429,10 +430,13 @@ where
                                 if !(arg_os.to_string_lossy().parse::<i64>().is_ok()
                                     || arg_os.to_string_lossy().parse::<f64>().is_ok())
                                 {
+                                    for arg in &*matcher.get_used(self.app) {
+                                        self.required.push(arg);
+                                    }
                                     return Err(ClapError::unknown_argument(
                                         &*arg_os.to_string_lossy(),
                                         "",
-                                        &*Usage::new(self).create_error_usage(matcher, None),
+                                        &*Usage::new(self).create_usage_with_title(),
                                         self.app.color(),
                                     ));
                                 }
@@ -461,11 +465,14 @@ where
                 if let Some(cdate) =
                     suggestions::did_you_mean(&*arg_os.to_string_lossy(), sc_names!(self.app))
                 {
+                    for arg in &*matcher.get_used(self.app) {
+                        self.required.push(arg);
+                    }
                     return Err(ClapError::invalid_subcommand(
                         arg_os.to_string_lossy().into_owned(),
                         cdate,
                         self.app.bin_name.as_ref().unwrap_or(&self.app.name),
-                        &*Usage::new(self).create_error_usage(matcher, None),
+                        &*Usage::new(self).create_usage_with_title(),
                         self.app.color(),
                     ));
                 }
@@ -517,10 +524,13 @@ where
             }
             if let Some(p) = positionals!(self.app).find(|p| p.index == Some(pos_counter as u64)) {
                 if p.is_set(ArgSettings::Last) && !self.is_set(AS::TrailingValues) {
+                    for arg in &*matcher.get_used(self.app) {
+                        self.required.push(arg);
+                    }
                     return Err(ClapError::unknown_argument(
                         &*arg_os.to_string_lossy(),
                         "",
-                        &*Usage::new(self).create_error_usage(matcher, None),
+                        &*Usage::new(self).create_usage_with_title(),
                         self.app.color(),
                     ));
                 }
@@ -550,8 +560,11 @@ where
                     Some(s) => s.to_string(),
                     None => {
                         if !self.is_set(AS::StrictUtf8) {
+                            for arg in &*matcher.get_used(self.app) {
+                                self.required.push(arg);
+                            }
                             return Err(ClapError::invalid_utf8(
-                                &*Usage::new(self).create_error_usage(matcher, None),
+                                &*Usage::new(self).create_usage_with_title(),
                                 self.app.color(),
                             ));
                         }
@@ -564,8 +577,11 @@ where
                 while let Some(v) = it.next() {
                     let a = v.into();
                     if a.to_str().is_none() && !self.is_set(AS::StrictUtf8) {
+                        for arg in &*matcher.get_used(self.app) {
+                            self.required.push(arg);
+                        }
                         return Err(ClapError::invalid_utf8(
-                            &*Usage::new(self).create_error_usage(matcher, None),
+                            &*Usage::new(self).create_usage_with_title(),
                             self.app.color(),
                         ));
                     }
@@ -581,21 +597,27 @@ where
                 && arg_os.starts_with(b"-"))
                 && !self.is_set(AS::InferSubcommands)
             {
+                for arg in &*matcher.get_used(self.app) {
+                    self.required.push(arg);
+                }
                 return Err(ClapError::unknown_argument(
                     &*arg_os.to_string_lossy(),
                     "",
-                    &*Usage::new(self).create_error_usage(matcher, None),
+                    &*Usage::new(self).create_usage_with_title(),
                     self.app.color(),
                 ));
             } else if !has_args || self.is_set(AS::InferSubcommands) && self.has_subcommands() {
                 if let Some(cdate) =
                     suggestions::did_you_mean(&*arg_os.to_string_lossy(), sc_names!(self.app))
                 {
+                    for arg in &*matcher.get_used(self.app) {
+                        self.required.push(arg);
+                    }
                     return Err(ClapError::invalid_subcommand(
                         arg_os.to_string_lossy().into_owned(),
                         cdate,
                         self.app.bin_name.as_ref().unwrap_or(&self.app.name),
-                        &*Usage::new(self).create_error_usage(matcher, None),
+                        &*Usage::new(self).create_usage_with_title(),
                         self.app.color(),
                     ));
                 } else {
@@ -606,10 +628,13 @@ where
                     ));
                 }
             } else {
+                for arg in &*matcher.get_used(self.app) {
+                    self.required.push(arg);
+                }
                 return Err(ClapError::unknown_argument(
                     &*arg_os.to_string_lossy(),
                     "",
-                    &*Usage::new(self).create_error_usage(matcher, None),
+                    &*Usage::new(self).create_usage_with_title(),
                     self.app.color(),
                 ));
             }
@@ -628,9 +653,12 @@ where
             self.parse_subcommand(&*sc_name, matcher, it)?;
         } else if self.is_set(AS::SubcommandRequired) {
             let bn = self.app.bin_name.as_ref().unwrap_or(&self.app.name);
+            for arg in &*matcher.get_used(self.app) {
+                self.required.push(arg);
+            }
             return Err(ClapError::missing_subcommand(
                 bn,
-                &Usage::new(self).create_error_usage(matcher, None),
+                &*Usage::new(self).create_usage_with_title(),
                 self.app.color(),
             ));
         } else if self.is_set(AS::SubcommandRequiredElseHelp) {
@@ -653,10 +681,10 @@ where
     fn possible_subcommand(&self, arg_os: &OsStr) -> (bool, Option<&str>) {
         debugln!("Parser::possible_subcommand: arg={:?}", arg_os);
         fn starts(h: &str, n: &OsStr) -> bool {
-            #[cfg(not(target_os = "windows"))]
-            use std::os::unix::ffi::OsStrExt;
             #[cfg(target_os = "windows")]
             use osstringext::OsStrExt3;
+            #[cfg(not(target_os = "windows"))]
+            use std::os::unix::ffi::OsStrExt;
 
             let n_bytes = n.as_bytes();
             let h_bytes = OsStr::new(h).as_bytes();
@@ -811,11 +839,10 @@ where
         debugln!("Parser::parse_subcommand;");
         let mut mid_string = String::new();
         if !self.is_set(AS::SubcommandsNegateReqs) {
-            let mut hs: Vec<&str> = self.required.iter().map(|n| &**n).collect();
             for k in matcher.arg_names() {
-                hs.push(k);
+                self.required.push(k);
             }
-            let reqs = Usage::new(self).get_required_usage_from(&hs, Some(matcher), None, false);
+            let reqs = Usage::new(self).get_required_usage_from(Some(matcher), None, false);
 
             for s in &reqs {
                 write!(&mut mid_string, " {}", s).expect(INTERNAL_ERROR_MSG);
@@ -963,6 +990,11 @@ where
         }
 
         debugln!("Parser::parse_long_arg: Didn't match anything");
+        // since we'll returning an error we need to add the "used" args to the required list
+        // so the usage string comes out correct
+        for arg in &*matcher.get_used(self.app) {
+            self.required.push(arg);
+        }
         self.did_you_mean_error(arg.to_str().expect(INVALID_UTF8), matcher)
             .map(|_| ParseResult::NotFound)
     }
@@ -1047,10 +1079,13 @@ where
                 }
             } else {
                 let arg = format!("-{}", c);
+                for arg in &*matcher.get_used(self.app) {
+                    self.required.push(arg);
+                }
                 return Err(ClapError::unknown_argument(
                     &*arg,
                     "",
-                    &*Usage::new(self).create_error_usage(matcher, None),
+                    &*Usage::new(self).create_usage_with_title(),
                     self.app.color(),
                 ));
             }
@@ -1081,7 +1116,8 @@ where
                 sdebugln!("Found Empty - Error");
                 return Err(ClapError::empty_value(
                     opt,
-                    &*Usage::new(self).create_error_usage(matcher, None),
+                    &*Usage::new(self)
+                        .create_usage_with_title_from_used(&*matcher.get_used(self.app)),
                     self.app.color(),
                 ));
             }
@@ -1096,7 +1132,7 @@ where
             sdebugln!("None, but requires equals...Error");
             return Err(ClapError::empty_value(
                 opt,
-                &*Usage::new(self).create_error_usage(matcher, None),
+                &*Usage::new(self).create_usage_with_title_from_used(&*matcher.get_used(self.app)),
                 self.app.color(),
             ));
         } else {
@@ -1412,7 +1448,7 @@ where
         Err(ClapError::unknown_argument(
             &*used_arg,
             &*suffix.0,
-            &*Usage::new(self).create_error_usage(matcher, None),
+            &*Usage::new(self).create_usage_with_title(),
             self.app.color(),
         ))
     }
@@ -1462,6 +1498,61 @@ where
     'a: 'b,
     'b: 'c,
 {
+    // @TODO @perf should return &strs but that causes a host of lifetime issues that need to be
+    // solved
+    pub(crate) fn get_required_unrolled(&self, extra: Option<&'a str>) -> Vec<&'a str> {
+        let mut unrolled: Vec<&'a str> = vec![];
+        let mut to_iter: Vec<&str> = self.required.iter().map(|&a| a).collect();
+        to_iter.extend(extra);
+        let mut tmp = vec![];
+        loop {
+            for req in to_iter
+                .iter()
+                .filter_map(|name| find!(self.app, name))
+                .filter(|arg| arg.requires.is_some())
+                .flat_map(|arg| arg.requires.as_ref().unwrap())
+                .map(|&(_, req)| req)
+            {
+                debugln!("usage::get_required_usage_from:iter:{};", req);
+                tmp.push(req);
+            }
+            for req in to_iter
+                .iter()
+                .filter_map(|name| find!(self.app, name, groups))
+                .filter(|grp| grp.requires.is_some())
+                .flat_map(|grp| grp.requires.as_ref().unwrap())
+            {
+                debugln!("usage::get_required_usage_from:iter:{};", req);
+                tmp.push(req);
+            }
+            if tmp.is_empty() {
+                debugln!("usage::get_required_usage_from: done with iter;");
+                unrolled.extend_from_slice(&*to_iter);
+                break;
+            } else {
+                let mut to_rem = vec![];
+                for (i, arg) in to_iter.iter().enumerate() {
+                    if let None = find!(self.app, arg, groups) {
+                        to_rem.push(i);
+                    }
+                }
+                for i in (0..to_iter.len()).rev() {
+                    debugln!(
+                        "usage::get_required_usage_from:iter:{}: moving to unrolled;",
+                        to_iter[i]
+                    );
+                    unrolled.push(to_iter.swap_remove(i));
+                }
+            }
+            mem::swap(&mut to_iter, &mut tmp);
+            tmp.clear();
+        }
+        unrolled.sort();
+        unrolled.dedup();
+        debugln!("usage::get_required_usage_from: unrolled={:?}", unrolled);
+        unrolled
+    }
+
     pub(crate) fn groups_for_arg(&self, name: &str) -> Option<Vec<&'a str>> {
         debugln!("Parser::groups_for_arg: name={}", name);
 

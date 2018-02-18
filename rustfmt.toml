@@ -1,2 +1,6 @@
-format_strings = false
 fn_single_line = true
+reorder_imports = true
+reorder_imports_in_group = true
+use_try_shorthand = true
+error_on_line_overflow = false
+

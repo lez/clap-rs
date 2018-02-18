@@ -1,12 +1,13 @@
 // Std
-use std::ffi::OsStr;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::mem;
 
 // Third Party
 use ordermap;
 
 // Internal
+use app::App;
 use args::{Arg, ArgMatches, MatchedArg, SubCommand};
 use args::settings::ArgSettings;
 
@@ -23,6 +24,22 @@ impl<'a> ArgMatcher<'a> {
 
     #[allow(dead_code)]
     pub fn is_present(&self, name: &str) -> bool { self.0.is_present(name) }
+
+    pub(crate) fn get_used<'b>(&self, app: &App<'a, 'b>) -> Vec<&'a str> {
+        self.arg_names()
+            .filter(|ref n| {
+                if let Some(a) = find!(app, **n) {
+                    !a.is_set(ArgSettings::Required) && !a.is_set(ArgSettings::Hidden)
+                } else {
+                    false
+                }
+            })
+            .map(|&n| n)
+            .collect()
+        // if let Some(r) = extra {
+        //     args.push(r);
+        // }
+    }
 
     pub fn propagate_globals(&mut self, global_arg_vec: &[&'a str]) {
         debugln!(
@@ -90,7 +107,7 @@ impl<'a> ArgMatcher<'a> {
 
     pub fn usage(&mut self, usage: String) { self.0.usage = Some(usage); }
 
-    pub fn arg_names(&'a self) -> ordermap::Keys<&'a str, MatchedArg> { self.0.args.keys() }
+    pub fn arg_names(&self) -> ordermap::Keys<&'a str, MatchedArg> { self.0.args.keys() }
 
     pub fn entry(&mut self, arg: &'a str) -> ordermap::Entry<&'a str, MatchedArg> {
         self.0.args.entry(arg)

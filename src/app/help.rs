@@ -6,20 +6,20 @@ use std::io::{self, Cursor, Read, Write};
 use std::usize;
 
 // Internal
+use INTERNAL_ERROR_MSG;
 use app::{App, AppSettings};
 use app::parser::Parser;
+use app::usage::Usage;
 use args::{Arg, ArgSettings};
 use errors::{Error, Result as ClapResult};
 use fmt::{Colorizer, ColorizerOption, Format};
-use app::usage::Usage;
 use map::VecMap;
-use INTERNAL_ERROR_MSG;
 
 // Third Party
-use unicode_width::UnicodeWidthStr;
 #[cfg(feature = "wrap_help")]
 use term_size;
 use textwrap;
+use unicode_width::UnicodeWidthStr;
 
 #[cfg(not(feature = "wrap_help"))]
 mod term_size {
@@ -835,7 +835,7 @@ impl<'w> Help<'w> {
             self.writer,
             "\n{}{}\n\n",
             TAB,
-            Usage::new(parser).create_usage_no_title(&[])
+            Usage::new(parser).create_help_usage(true)
         )?;
 
         let flags = parser.has_flags();
@@ -1043,7 +1043,7 @@ impl<'w> Help<'w> {
                     write!(
                         self.writer,
                         "{}",
-                        Usage::new(parser).create_usage_no_title(&[])
+                        Usage::new(parser).create_help_usage(true)
                     )?;
                 }
                 b"all-args" => {

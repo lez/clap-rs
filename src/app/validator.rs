@@ -5,15 +5,15 @@ use std::ascii::AsciiExt;
 // Internal
 use INTERNAL_ERROR_MSG;
 use INVALID_UTF8;
+use app::parser::{ParseResult, Parser};
+use app::settings::AppSettings as AS;
+use app::usage::Usage;
 use args::{Arg, ArgMatcher, MatchedArg};
 use args::settings::ArgSettings;
 use errors::{Error, ErrorKind};
 use errors::Result as ClapResult;
-use osstringext::OsStrExt2;
-use app::settings::AppSettings as AS;
-use app::parser::{ParseResult, Parser};
 use fmt::{Colorizer, ColorizerOption};
-use app::usage::Usage;
+use osstringext::OsStrExt2;
 
 pub struct Validator<'a, 'b, 'c, 'z>(&'z mut Parser<'a, 'b, 'c>)
 where
@@ -36,7 +36,7 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
         self.0.add_defaults(matcher)?;
         if let ParseResult::Opt(a) = needs_val_of {
             debugln!("Validator::validate: needs_val_of={:?}", a);
-            let o = find!(self.0.app, &a).expect(INTERNAL_ERROR_MSG);
+            let o = find!(self.0.app, &a).expect(INTERNAL_ERROR_MSG).clone();
             self.validate_required(matcher)?;
             reqs_validated = true;
             let should_err = if let Some(v) = matcher.0.args.get(&*o.name) {
@@ -45,9 +45,12 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
                 true
             };
             if should_err {
+                for arg in &*matcher.get_used(self.0.app) {
+                    self.0.required.push(arg);
+                }
                 return Err(Error::empty_value(
-                    o,
-                    &*Usage::new(self.0).create_error_usage(matcher, None),
+                    &o,
+                    &*Usage::new(self.0).create_usage_with_title(),
                     self.0.app.color(),
                 ));
             }
@@ -69,7 +72,7 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
             self.validate_required(matcher)?;
         }
         self.validate_matched_args(matcher)?;
-        matcher.usage(Usage::new(self.0).create_usage_with_title(&[]));
+        matcher.usage(Usage::new(self.0).create_help_usage_with_title());
 
         Ok(())
     }
@@ -87,8 +90,11 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
                     "Validator::validate_arg_values: invalid UTF-8 found in val {:?}",
                     val
                 );
+                for arg in &*matcher.get_used(self.0.app) {
+                    self.0.required.push(arg);
+                }
                 return Err(Error::invalid_utf8(
-                    &*Usage::new(self.0).create_error_usage(matcher, None),
+                    &*Usage::new(self.0).create_usage_with_title(),
                     self.0.app.color(),
                 ));
             }
@@ -101,11 +107,14 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
                     p_vals.contains(&&*val_str)
                 };
                 if !ok {
+                    for arg in &*matcher.get_used(self.0.app) {
+                        self.0.required.push(arg);
+                    }
                     return Err(Error::invalid_value(
                         val_str,
                         p_vals,
                         arg,
-                        &*Usage::new(self.0).create_error_usage(matcher, None),
+                        &*Usage::new(self.0).create_usage_with_title(),
                         self.0.app.color(),
                     ));
                 }
@@ -114,9 +123,12 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
                 && matcher.contains(&*arg.name)
             {
                 debugln!("Validator::validate_arg_values: illegal empty val found");
+                for arg in &*matcher.get_used(self.0.app) {
+                    self.0.required.push(arg);
+                }
                 return Err(Error::empty_value(
                     arg,
-                    &*Usage::new(self.0).create_error_usage(matcher, None),
+                    &*Usage::new(self.0).create_usage_with_title(),
                     self.0.app.color(),
                 ));
             }
@@ -156,7 +168,10 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
             .map_or(None, |aa| Some(format!("{}", aa))));
         debugln!("build_err!: '{:?}' conflicts with '{}'", c_with, &name);
         //        matcher.remove(&name);
-        let usg = Usage::new(self.0).create_error_usage(matcher, None);
+        for arg in &*matcher.get_used(self.0.app) {
+            self.0.required.push(arg);
+        }
+        let usg = &*Usage::new(self.0).create_usage_with_title();
         if let Some(f) = find!(self.0.app, &name) {
             debugln!("build_err!: It was a flag...");
             Err(Error::argument_conflict(
@@ -280,6 +295,9 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
                         return self.missing_required_error(matcher, None);
                     }
                 }
+                for arg in &*matcher.get_used(self.0.app) {
+                    self.0.required.push(arg);
+                }
             }
         }
         Ok(())
@@ -294,9 +312,12 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
         debugln!("Validator::validate_arg_num_occurs: a={};", a.name);
         if ma.occurs > 1 && !a.is_set(ArgSettings::MultipleOccurrences) {
             // Not the first time, and we don't allow multiples
+            for arg in &*matcher.get_used(self.0.app) {
+                self.0.required.push(arg);
+            }
             return Err(Error::unexpected_multiple_usage(
                 a,
-                &*Usage::new(self.0).create_error_usage(matcher, None),
+                &*Usage::new(self.0).create_usage_with_title(),
                 self.0.app.color(),
             ));
         }
@@ -319,6 +340,9 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
             };
             if should_err {
                 debugln!("Validator::validate_arg_num_vals: Sending error WrongNumberOfValues");
+                for arg in &*matcher.get_used(self.0.app) {
+                    self.0.required.push(arg);
+                }
                 return Err(Error::wrong_number_of_values(
                     a,
                     num,
@@ -335,7 +359,7 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
                     } else {
                         "ere"
                     },
-                    &*Usage::new(self.0).create_error_usage(matcher, None),
+                    &*Usage::new(self.0).create_usage_with_title(),
                     self.0.app.color(),
                 ));
             }
@@ -344,6 +368,9 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
             debugln!("Validator::validate_arg_num_vals: max_vals set...{}", num);
             if (ma.vals.len() as u64) > num {
                 debugln!("Validator::validate_arg_num_vals: Sending error TooManyValues");
+                for arg in &*matcher.get_used(self.0.app) {
+                    self.0.required.push(arg);
+                }
                 return Err(Error::too_many_values(
                     ma.vals
                         .iter()
@@ -352,7 +379,7 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
                         .to_str()
                         .expect(INVALID_UTF8),
                     a,
-                    &*Usage::new(self.0).create_error_usage(matcher, None),
+                    &*Usage::new(self.0).create_usage_with_title(),
                     self.0.app.color(),
                 ));
             }
@@ -361,11 +388,14 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
             debugln!("Validator::validate_arg_num_vals: min_vals set: {}", num);
             if (ma.vals.len() as u64) < num && num != 0 {
                 debugln!("Validator::validate_arg_num_vals: Sending error TooFewValues");
+                for arg in &*matcher.get_used(self.0.app) {
+                    self.0.required.push(arg);
+                }
                 return Err(Error::too_few_values(
                     a,
                     num,
                     ma.vals.len(),
-                    &*Usage::new(self.0).create_error_usage(matcher, None),
+                    &*Usage::new(self.0).create_usage_with_title(),
                     self.0.app.color(),
                 ));
             }
@@ -376,9 +406,12 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
         // Issue 665 (https://github.com/kbknapp/clap-rs/issues/665)
         // Issue 1105 (https://github.com/kbknapp/clap-rs/issues/1105)
         if a.is_set(ArgSettings::TakesValue) && !min_vals_zero && ma.vals.is_empty() {
+            for arg in &*matcher.get_used(self.0.app) {
+                self.0.required.push(arg);
+            }
             return Err(Error::empty_value(
                 a,
-                &*Usage::new(self.0).create_error_usage(matcher, None),
+                &*Usage::new(self.0).create_usage_with_title(),
                 self.0.app.color(),
             ));
         }
@@ -393,6 +426,7 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
     ) -> ClapResult<()> {
         debugln!("Validator::validate_arg_requires:{};", a.name);
         if let Some(ref a_reqs) = a.requires {
+            // Conditional requirements
             for &(val, name) in a_reqs.iter().filter(|&&(val, _)| val.is_some()) {
                 let missing_req =
                     |v| v == val.expect(INTERNAL_ERROR_MSG) && !matcher.contains(name);
@@ -400,31 +434,78 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
                     return self.missing_required_error(matcher, None);
                 }
             }
+
+            // Other args required
             for &(_, name) in a_reqs.iter().filter(|&&(val, _)| val.is_none()) {
                 if !matcher.contains(name) {
-                    return self.missing_required_error(matcher, Some(name));
+                    return self.missing_required_error(matcher, None);
                 }
             }
         }
         Ok(())
     }
 
-    fn validate_required(&self, matcher: &ArgMatcher<'a>) -> ClapResult<()> {
+    fn validate_required(&mut self, matcher: &ArgMatcher<'a>) -> ClapResult<()> {
         debugln!(
             "Validator::validate_required: required={:?};",
             self.0.required
         );
 
-        'outer: for name in &self.0.required {
+        let mut should_err = false;
+        let mut to_rem = Vec::new();
+        // let mut sub_required = Vec::new();
+        for &name in &self.0.required {
             debugln!("Validator::validate_required:iter:{}:", name);
-            if matcher.contains(name) {
-                continue 'outer;
+            if let Some(a) = find!(self.0.app, &name) {
+                let was_used = matcher.contains(name);
+                if self.is_missing_required_ok(a, matcher) && !was_used {
+                    debugln!(
+                        "Validator::validate_required:iter:{}: was used or is ok to miss",
+                        name
+                    );
+                    to_rem.push(name);
+                    // if let Some(ref areqs) = a.requires {
+                    // for name in areqs
+                    //     .iter()
+                    //     .filter(|&&(val, _)| val.is_none())
+                    //     .map(|&(_, name)| name)
+                    // {
+                    //     to_rem.push(name);
+                    // }
+                    // }
+                    continue;
+                }
+                if !was_used {
+                    should_err = true;
+                }
+                // if let Some(ref areqs) = a.requires {
+                //     for name in areqs
+                //         .iter()
+                //         .filter(|&&(val, _)| val.is_none())
+                //         .map(|&(_, name)| name)
+                //     {
+                //         sub_required.push(name);
+                //     }
+                // }
             }
-            if let Some(a) = find!(self.0.app, name) {
-                if self.is_missing_required_ok(a, matcher) {
-                    continue 'outer;
+        }
+        debugln!("Validator::validate_required:error: removing {:?}", to_rem);
+        'to_rem: for r in &to_rem {
+            'app_req: for i in (0..self.0.required.len()).rev() {
+                if &self.0.required[i] == r {
+                    self.0.required.swap_remove(i);
+                    continue 'to_rem;
                 }
             }
+        }
+        // debugln!(
+        //     "Validator::validate_required:error: sub reqs found {:?}",
+        //     sub_required
+        // );
+        // for r in sub_required.into_iter() {
+        //     self.0.required.push(r);
+        // }
+        if should_err {
             return self.missing_required_error(matcher, None);
         }
 
@@ -484,33 +565,29 @@ impl<'a, 'b, 'c, 'z> Validator<'a, 'b, 'c, 'z> {
     fn missing_required_error(
         &self,
         matcher: &ArgMatcher<'a>,
-        extra: Option<&str>,
+        extra: Option<&'a str>,
     ) -> ClapResult<()> {
         debugln!("Validator::missing_required_error: extra={:?}", extra);
         let c = Colorizer::new(ColorizerOption {
             use_stderr: true,
             when: self.0.app.color(),
         });
-        let mut reqs = self.0.required.iter().map(|&r| &*r).collect::<Vec<_>>();
-        if let Some(r) = extra {
-            reqs.push(r);
-        }
-        reqs.retain(|n| !matcher.contains(n));
-        reqs.dedup();
-        debugln!("Validator::missing_required_error: reqs={:#?}", reqs);
-        let req_args = Usage::new(self.0)
-            .get_required_usage_from(&reqs[..], Some(matcher), extra, true)
-            .iter()
+        // @TODO @FIXME @P1 get_required_usage_from is turning the args into strings for display
+        // we need them still in arg name form so we can skip ones that are already used
+        // but then we need ALL of them for the usage string...so how?
+        let reqs = self.0.get_required_unrolled(extra);
+        debugln!("Validator::missing_required_error: reqs={:?}", reqs);
+        let req_args = reqs.iter()
+            .filter(|r| !matcher.contains(r))
             .fold(String::new(), |acc, s| {
                 acc + &format!("\n    {}", c.error(s))[..]
             });
-        debugln!(
-            "Validator::missing_required_error: req_args={:#?}",
-            req_args
-        );
         Err(Error::missing_required_argument(
             &*req_args,
-            &*Usage::new(self.0).create_error_usage(matcher, extra),
+            &*format!(
+                "USAGE:\n    {}",
+                Usage::new(self.0).create_smart_usage_from_reqs(&reqs)
+            ),
             self.0.app.color(),
         ))
     }

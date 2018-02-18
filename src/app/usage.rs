@@ -3,10 +3,10 @@ use std::collections::{BTreeMap, VecDeque};
 
 // Internal
 use INTERNAL_ERROR_MSG;
+use app::parser::Parser;
+use app::settings::AppSettings as AS;
 use args::{Arg, ArgMatcher};
 use args::settings::ArgSettings;
-use app::settings::AppSettings as AS;
-use app::parser::Parser;
 
 pub struct Usage<'a, 'b, 'c, 'z>(&'z Parser<'a, 'b, 'c>)
 where
@@ -17,44 +17,33 @@ where
 impl<'a, 'b, 'c, 'z> Usage<'a, 'b, 'c, 'z> {
     pub fn new(p: &'z Parser<'a, 'b, 'c>) -> Self { Usage(p) }
 
-    // Creates a usage string for display. This happens just after all arguments were parsed, but before
-    // any subcommands have been parsed (so as to give subcommands their own usage recursively)
-    pub fn create_usage_with_title(&self, used: &[&str]) -> String {
+    // Creates a usage string for display. This happens just after all arguments were parsed, but
+    // before any subcommands have been parsed (so as to give subcommands their own usage
+    // recursively)
+    pub fn create_usage_with_title(&self) -> String {
         debugln!("usage::create_usage_with_title;");
         let mut usage = String::with_capacity(75);
         usage.push_str("USAGE:\n    ");
-        usage.push_str(&*self.create_usage_no_title(used));
+        usage.push_str(&*self.create_usage_no_title());
         usage
     }
 
-    // Creates a usage string to be used in error message (i.e. one with currently used args)
-    pub fn create_error_usage(&self, matcher: &ArgMatcher<'a>, extra: Option<&str>) -> String {
-        let mut args: Vec<_> = matcher
-            .arg_names()
-            .filter(|ref n| {
-                if let Some(a) = find!(self.0.app, **n) {
-                    !a.is_set(ArgSettings::Required) && !a.is_set(ArgSettings::Hidden)
-                } else {
-                    true // flags can't be required, so they're always true
-                }
-            })
-            .map(|&n| n)
-            .collect();
-        if let Some(r) = extra {
-            args.push(r);
-        }
-        self.create_usage_with_title(&*args)
+    pub fn create_help_usage_with_title(&self) -> String {
+        debugln!("usage::create_usage_with_title;");
+        let mut usage = String::with_capacity(75);
+        usage.push_str("USAGE:\n    ");
+        usage.push_str(&*self.create_help_usage(true));
+
+        usage
     }
 
     // Creates a usage string (*without title*) if one was not provided by the user manually.
-    pub fn create_usage_no_title(&self, used: &[&str]) -> String {
+    pub fn create_usage_no_title(&self) -> String {
         debugln!("usage::create_usage_no_title;");
         if let Some(u) = self.0.app.usage_str {
             String::from(&*u)
-        } else if used.is_empty() {
-            self.create_help_usage(true)
         } else {
-            self.create_smart_usage(used)
+            self.create_smart_usage()
         }
     }
 
@@ -68,10 +57,10 @@ impl<'a, 'b, 'c, 'z> Usage<'a, 'b, 'c, 'z> {
             .unwrap_or_else(|| self.0.app.bin_name.as_ref().unwrap_or(&self.0.app.name));
         usage.push_str(&*name);
         let req_string = if incl_reqs {
-            let mut reqs: Vec<&str> = self.0.required().map(|r| &**r).collect();
+            let mut reqs: Vec<&'a str> = self.0.required.iter().map(|&r| r).collect();
             reqs.sort();
             reqs.dedup();
-            self.get_required_usage_from(&reqs, None, None, false)
+            self.get_required_usage_from(None, None, false)
                 .iter()
                 .fold(String::new(), |a, s| a + &format!(" {}", s)[..])
         } else {
@@ -165,16 +154,22 @@ impl<'a, 'b, 'c, 'z> Usage<'a, 'b, 'c, 'z> {
 
     // Creates a context aware usage string, or "smart usage" from currently used
     // args, and requirements
-    fn create_smart_usage(&self, used: &[&str]) -> String {
+    fn create_smart_usage(&self) -> String {
         debugln!("usage::smart_usage;");
+        let reqs = self.get_required_usage_from(None, None, false);
+        self.create_smart_usage_from_reqs(&*reqs)
+    }
+
+    // requirements have already been calculated
+    pub(crate) fn create_smart_usage_from_reqs<I, T>(&self, reqs: I) -> String
+    where
+        T: AsRef<str>,
+        I: IntoIterator<Item = T>,
+    {
         let mut usage = String::with_capacity(75);
-        let mut hs: Vec<&str> = self.0.required().map(|s| &**s).collect();
-        hs.extend_from_slice(used);
-
-        let r_string = self.get_required_usage_from(&hs, None, None, false)
-            .iter()
-            .fold(String::new(), |acc, s| acc + &format!(" {}", s)[..]);
-
+        let r_string = reqs.into_iter().fold(String::new(), |acc, s| {
+            acc + &format!(" {}", s.as_ref())[..]
+        });
         usage.push_str(
             &self.0
                 .app
@@ -313,102 +308,24 @@ impl<'a, 'b, 'c, 'z> Usage<'a, 'b, 'c, 'z> {
     // Returns the required args in usage string form by fully unrolling all groups
     pub fn get_required_usage_from(
         &self,
-        reqs: &[&str],
         matcher: Option<&ArgMatcher<'a>>,
-        extra: Option<&str>,
+        extra: Option<&'a str>,
         incl_last: bool,
-    ) -> VecDeque<String> {
+    ) -> Vec<String> {
         debugln!(
             "usage::get_required_usage_from: reqs={:?}, extra={:?}",
             reqs,
             extra
         );
-        let mut desc_reqs: Vec<&str> = vec![];
-        desc_reqs.extend(extra);
-        let mut new_reqs: Vec<&str> = vec![];
-        macro_rules! get_requires {
-            (@group $a: ident, $v:ident, $p:ident) => {{
-                if let Some(rl) = groups!(self.0.app)
-                                                .filter(|g| g.requires.is_some())
-                                                .find(|g| &g.name == $a)
-                                                .map(|g| g.requires.as_ref().unwrap()) {
-                    for r in rl {
-                        if !$p.contains(&r) {
-                            debugln!("usage::get_required_usage_from:iter:{}: adding group req={:?}",
-                                $a, r);
-                            $v.push(r);
-                        }
-                    }
-                }
-            }};
-            ($a:ident, $what:ident, $how:ident, $v:ident, $p:ident) => {{
-                if let Some(rl) = $what!(self.0.app)
-                                            .filter(|a| a.requires.is_some())
-                                            .find(|arg| &arg.name == $a)
-                                            .map(|a| a.requires.as_ref().unwrap()) {
-                    for &(_, r) in rl.iter() {
-                        if !$p.contains(&r) {
-                            debugln!("usage::get_required_usage_from:iter:{}: adding arg req={:?}",
-                                $a, r);
-                            $v.push(r);
-                        }
-                    }
-                }
-            }};
-        }
-        // initialize new_reqs
-        for a in reqs {
-            get_requires!(a, flags, iter, new_reqs, reqs);
-            get_requires!(a, opts, iter, new_reqs, reqs);
-            get_requires!(a, positionals, values, new_reqs, reqs);
-            get_requires!(@group a, new_reqs, reqs);
-        }
-        desc_reqs.extend_from_slice(&*new_reqs);
-        debugln!(
-            "usage::get_required_usage_from: after init desc_reqs={:?}",
-            desc_reqs
-        );
-        loop {
-            let mut tmp = vec![];
-            for a in &new_reqs {
-                get_requires!(a, flags, iter, tmp, desc_reqs);
-                get_requires!(a, opts, iter, tmp, desc_reqs);
-                get_requires!(a, positionals, values, tmp, desc_reqs);
-                get_requires!(@group a, tmp, desc_reqs);
-            }
-            if tmp.is_empty() {
-                debugln!("usage::get_required_usage_from: no more children");
-                break;
-            } else {
-                debugln!("usage::get_required_usage_from: after iter tmp={:?}", tmp);
-                debugln!(
-                    "usage::get_required_usage_from: after iter new_reqs={:?}",
-                    new_reqs
-                );
-                desc_reqs.extend_from_slice(&*new_reqs);
-                new_reqs.clear();
-                new_reqs.extend_from_slice(&*tmp);
-                debugln!(
-                    "usage::get_required_usage_from: after iter desc_reqs={:?}",
-                    desc_reqs
-                );
-            }
-        }
-        desc_reqs.extend_from_slice(reqs);
-        desc_reqs.sort();
-        desc_reqs.dedup();
-        debugln!(
-            "usage::get_required_usage_from: final desc_reqs={:?}",
-            desc_reqs
-        );
+        let unrolled = self.0.get_required_unrolled(extra);
         let mut ret_val = VecDeque::new();
         let args_in_groups = groups!(self.0.app)
-            .filter(|gn| desc_reqs.contains(&gn.name))
+            .filter(|gn| unrolled.contains(&gn.name))
             .flat_map(|g| self.0.arg_names_in_group(g.name))
             .collect::<Vec<_>>();
 
         let pmap = if let Some(m) = matcher {
-            desc_reqs
+            unrolled
                 .iter()
                 .filter(|a| self.0.positionals.values().any(|p| &p == a))
                 .filter(|&pos| !m.contains(pos))
@@ -418,7 +335,7 @@ impl<'a, 'b, 'c, 'z> Usage<'a, 'b, 'c, 'z> {
                 .map(|pos| (pos.index.unwrap(), pos))
                 .collect::<BTreeMap<u64, &Arg>>() // sort by index
         } else {
-            desc_reqs
+            unrolled
                 .iter()
                 .filter(|a| self.0.positionals.values().any(|p| &p == a))
                 .filter_map(|pos| find!(self.0.app, pos))
@@ -431,18 +348,19 @@ impl<'a, 'b, 'c, 'z> Usage<'a, 'b, 'c, 'z> {
             "usage::get_required_usage_from: args_in_groups={:?}",
             args_in_groups
         );
+        debugln!("usage::get_required_usage_from: pmap={:?}", pmap);
         for &p in pmap.values() {
             let s = p.to_string();
             if args_in_groups.is_empty() || !args_in_groups.contains(&&*s) {
                 ret_val.push_back(s);
             }
         }
-        for a in desc_reqs
+        for a in unrolled
             .iter()
             .filter(|name| !positionals!(self.0.app).any(|p| &&p.name == name))
-            .filter(|name| !groups!(self.0.app).any(|g| &&g.name == name))
-            .filter(|name| !args_in_groups.contains(name))
-            .filter(|name| !(matcher.is_some() && matcher.as_ref().unwrap().contains(name)))
+            // .filter(|name| !groups!(self.0.app).any(|g| &&g.name == name))
+            .filter(|name| !args_in_groups.contains(&(name.as_ref())))
+        // .filter(|name| !(matcher.is_some() && matcher.as_ref().unwrap().contains(name)))
         {
             debugln!("usage::get_required_usage_from:iter:{}:", a);
             let arg = find!(self.0.app, a)
@@ -451,7 +369,7 @@ impl<'a, 'b, 'c, 'z> Usage<'a, 'b, 'c, 'z> {
             ret_val.push_back(arg);
         }
         let mut g_vec: Vec<String> = vec![];
-        for g in desc_reqs
+        for g in unrolled
             .iter()
             .filter(|n| groups!(self.0.app).any(|g| &&g.name == n))
         {
@@ -465,6 +383,6 @@ impl<'a, 'b, 'c, 'z> Usage<'a, 'b, 'c, 'z> {
             ret_val.push_back(g);
         }
 
-        ret_val
+        ret_val.into()
     }
 }

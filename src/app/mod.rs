@@ -83,6 +83,12 @@ impl<'a, 'b> App<'a, 'b> {
         }
     }
 
+    /// some doc
+    pub fn argv(mut self, argv: &mut Vec<OsString>) -> Self {
+        self.p.extra_argv.append(argv);
+        self
+    }
+
     /// Get the name of the app
     pub fn get_name(&self) -> &str { &self.p.meta.name }
 
@@ -1627,6 +1633,10 @@ impl<'a, 'b> App<'a, 'b> {
                     }
                 }
             }
+        }
+
+        if let Err(e) = self.p.match_extra_argv(&mut matcher) {
+            return Err(e);
         }
 
         // do the real parsing

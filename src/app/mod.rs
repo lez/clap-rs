@@ -1614,6 +1614,7 @@ impl<'a, 'b> App<'a, 'b> {
         let mut matcher = ArgMatcher::new();
 
         let mut it = itr.into_iter();
+        let mut all_args: Vec<OsString> = Vec::new();
         // Get the name of the program (argument 1 of env::args()) and determine the
         // actual file
         // that was used to execute the program. This is because a program called
@@ -1635,12 +1636,17 @@ impl<'a, 'b> App<'a, 'b> {
             }
         }
 
-        if let Err(e) = self.p.match_extra_argv(&mut matcher) {
-            return Err(e);
+        for arg in self.p.extra_argv.iter() {
+            all_args.push(arg.clone());
+        }
+
+        for arg in it {
+            let x: OsString = arg.into();
+            all_args.push(x);
         }
 
         // do the real parsing
-        if let Err(e) = self.p.get_matches_with(&mut matcher, &mut it.peekable()) {
+        if let Err(e) = self.p.get_matches_with(&mut matcher, &mut all_args.into_iter().peekable()) {
             return Err(e);
         }
 

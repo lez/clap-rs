@@ -831,19 +831,6 @@ where
         ret
     }
 
-    pub fn match_extra_argv(
-        &mut self,
-        mut matcher: &mut ArgMatcher<'a>,
-    ) -> ClapResult<()>
-    {
-        let argv_copy = self.extra_argv.clone();
-        if let Err(e) = self.get_matches_with(&mut matcher, &mut argv_copy.into_iter().peekable()) {
-            return Err(e);
-        }
-        self.overrides.truncate(0);
-        Ok(())
-    }
-
     // The actual parsing function
     #[cfg_attr(feature = "lints", allow(while_let_on_iterator, collapsible_if))]
     pub fn get_matches_with<I, T>(
